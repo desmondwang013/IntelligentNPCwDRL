@@ -1,5 +1,14 @@
 from typing import Dict, Optional
 import numpy as np
+import warnings
+import logging
+
+# Suppress the "UNEXPECTED" warnings from sentence-transformers model loading
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", message=".*UNEXPECTED.*")
+warnings.filterwarnings("ignore", message=".*position_ids.*")
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -34,7 +43,21 @@ class TextEmbedder:
                 "Install with: pip install sentence-transformers"
             )
 
-        self._model = SentenceTransformer(self.model_name)
+        # Suppress all the noisy output during model loading
+        import os
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+        # Temporarily suppress stderr for clean loading
+        import sys
+        from io import StringIO
+        old_stderr = sys.stderr
+        sys.stderr = StringIO()
+
+        try:
+            self._model = SentenceTransformer(self.model_name, device="cpu")
+        finally:
+            sys.stderr = old_stderr
+
         self._initialized = True
 
     def embed(self, text: str) -> np.ndarray:

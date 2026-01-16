@@ -9,7 +9,7 @@ from src.world.entities import ObjectType, ObjectColor, ObjectShape, ObjectSize
 class ObservationConfig:
     """Configuration for observation vector construction."""
     world_size: int = 64
-    num_nearest_objects: int = 8
+    num_nearest_objects: int = 10  # Changed from 8 to see ALL objects (omniscient)
     embedding_dim: int = 384
     max_intent_age_ticks: int = 960  # 60 seconds for normalization
 

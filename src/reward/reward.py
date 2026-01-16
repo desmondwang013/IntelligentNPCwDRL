@@ -10,19 +10,19 @@ class RewardConfig:
     All values can be adjusted based on training performance.
     """
     # Progress rewards (per tick)
-    progress_scale: float = 1.0          # Reward for moving closer to target
+    progress_scale: float = 2.0          # Reward for moving closer to target (doubled)
 
     # Terminal rewards (when intent ends)
-    completion_bonus: float = 10.0       # Reward for completing intent
-    timeout_penalty: float = -5.0        # Penalty for timing out
+    completion_bonus: float = 15.0       # Reward for completing intent (was 10)
+    timeout_penalty: float = -10.0       # Penalty for timing out (was -5)
     cancel_penalty: float = 0.0          # No penalty for user cancellation (not NPC's fault)
 
     # Per-tick penalties
-    time_penalty: float = -0.01          # Small penalty each tick to encourage speed
-    collision_penalty: float = -0.1      # Penalty for trying to move into obstacle
+    time_penalty: float = -0.02          # Penalty each tick to encourage speed (was -0.01)
+    collision_penalty: float = -0.2      # Penalty for trying to move into obstacle (was -0.1)
 
     # Anti-oscillation (moving back and forth)
-    oscillation_penalty: float = -0.05   # Penalty for reversing direction
+    oscillation_penalty: float = -0.1    # Penalty for reversing direction (was -0.05)
     oscillation_window: int = 4          # How many actions to check for oscillation
 
 
