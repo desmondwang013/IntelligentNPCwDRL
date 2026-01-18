@@ -1,3 +1,16 @@
+"""
+LEGACY: This observation builder includes language embeddings (384 dimensions).
+
+In the current architecture, RL receives only structured goals, no language.
+Use `SimpleObservationBuilder` from `src/observation/simple_builder.py` instead.
+
+This file is kept for backward compatibility with:
+- Legacy NPCEnv
+- Old training scripts (train.py, train_curriculum*.py)
+- Demo scripts that still use embeddings
+
+See README.md for the current architecture: LLM → Target Resolver → RL Executor
+"""
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 import numpy as np

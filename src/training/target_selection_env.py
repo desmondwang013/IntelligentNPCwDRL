@@ -1,6 +1,16 @@
 """
-Gym environment for training the target selection policy.
+LEGACY: Gym environment for training the target selection policy.
 
+This was an experimental approach where RL learned to select targets from embeddings.
+In the current architecture, target resolution is DETERMINISTIC:
+- LLM outputs descriptive text ("red box")
+- Validator/Resolver does exact match on world state to find target_id
+- No learning required for target selection
+
+This file is kept for reference but is NOT part of the active architecture.
+Use `SimpleNPCEnv` from `src/training/simple_env.py` for RL training.
+
+Original description:
 This is a single-step environment: the agent sees an instruction
 embedding + similarity scores to each object + object features,
 then selects one object.

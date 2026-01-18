@@ -29,11 +29,29 @@ ACTION_DELTAS: Dict[Action, Tuple[float, float]] = {
 class WorldConfig:
     size: int = 64
     num_objects: int = 10
-    min_separation: float = 3.0
-    edge_margin: float = 2.0
+    # min_separation and edge_margin are set as a proportion of world size
+    # This allows curriculum learning to work with different world sizes
+    _min_separation: Optional[float] = None
+    _edge_margin: Optional[float] = None
     ticks_per_second: int = 16
     npc_speed: float = 0.5
     collision_radius: float = 0.5
+
+    @property
+    def min_separation(self) -> float:
+        """Minimum separation between entities, scaled to world size."""
+        if self._min_separation is not None:
+            return self._min_separation
+        # Default: 3.0 for 64x64, scales proportionally
+        return 3.0 * (self.size / 64.0)
+
+    @property
+    def edge_margin(self) -> float:
+        """Edge margin for spawning, scaled to world size."""
+        if self._edge_margin is not None:
+            return self._edge_margin
+        # Default: 2.0 for 64x64, scales proportionally
+        return 2.0 * (self.size / 64.0)
 
 
 class World:

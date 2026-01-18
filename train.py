@@ -1,7 +1,14 @@
 """
-Training script for the NPC agent.
+LEGACY: Training script using NPCEnv with language embeddings (575-dim observation).
 
-Usage:
+For the current architecture, use `train_simple.py` instead, which:
+- Uses SimpleNPCEnv (24-dim observation, no embeddings)
+- Has two-phase reward training (exploration → precision)
+- Aligns with LLM → Target Resolver → RL Executor design
+
+This file is kept for backward compatibility and reference.
+
+Original usage:
     python train.py                    # Train with defaults
     python train.py --timesteps 50000  # Short training run
     python train.py --eval-only        # Evaluate existing model

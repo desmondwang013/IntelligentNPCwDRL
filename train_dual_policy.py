@@ -1,7 +1,14 @@
 """
-Training script for the dual policy architecture.
+LEGACY: Dual policy architecture (learned target selection + movement).
 
-Usage:
+In the current architecture:
+- Target resolution is DETERMINISTIC (not learned) via Validator/Resolver
+- RL only handles motor execution with structured goals
+
+Use `train_simple.py` for the current architecture instead.
+This file is kept for reference.
+
+Original usage:
     python train_dual_policy.py
     python train_dual_policy.py --target-steps 100000 --movement-steps 200000
     python train_dual_policy.py --eval-only --model-name my_model

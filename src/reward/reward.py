@@ -8,22 +8,69 @@ class RewardConfig:
     """
     Configurable reward weights. Start simple, tune later.
     All values can be adjusted based on training performance.
+
+    V2: Emphasize distance-progress over terminal rewards.
+    The agent should learn that getting closer = good, regardless of completion.
+
+    Two-phase training approach:
+    - Exploration phase: No penalties, let agent learn "movement toward target = good"
+    - Precision phase: Add penalties to refine behavior
     """
-    # Progress rewards (per tick)
-    progress_scale: float = 2.0          # Reward for moving closer to target (doubled)
+    # Progress rewards (per tick) - THIS IS THE MAIN LEARNING SIGNAL
+    progress_scale: float = 5.0          # Reward for each unit closer
+
+    # Bonus for sustained progress (getting closer multiple steps in a row)
+    sustained_progress_bonus: float = 0.5  # Extra reward if made progress last 3 steps
 
     # Terminal rewards (when intent ends)
-    completion_bonus: float = 15.0       # Reward for completing intent (was 10)
-    timeout_penalty: float = -10.0       # Penalty for timing out (was -5)
-    cancel_penalty: float = 0.0          # No penalty for user cancellation (not NPC's fault)
+    completion_bonus: float = 10.0       # Bonus for success
+    timeout_penalty: float = -5.0        # Penalty for timeout
+    cancel_penalty: float = 0.0          # No penalty for user cancellation
 
     # Per-tick penalties
-    time_penalty: float = -0.02          # Penalty each tick to encourage speed (was -0.01)
-    collision_penalty: float = -0.2      # Penalty for trying to move into obstacle (was -0.1)
-
-    # Anti-oscillation (moving back and forth)
-    oscillation_penalty: float = -0.1    # Penalty for reversing direction (was -0.05)
+    time_penalty: float = -0.01          # Small pressure to finish
+    collision_penalty: float = -0.3      # Penalty for bumping into things
+    oscillation_penalty: float = -0.2    # Penalty for back-and-forth movement
     oscillation_window: int = 4          # How many actions to check for oscillation
+    wait_penalty: float = -0.05          # Penalty for WAIT action
+
+    @staticmethod
+    def exploration_phase() -> "RewardConfig":
+        """
+        Config for early training: NO penalties, free exploration.
+        Agent learns: movement toward target = good.
+        """
+        return RewardConfig(
+            progress_scale=5.0,
+            sustained_progress_bonus=0.5,
+            completion_bonus=15.0,        # Bigger bonus for success
+            timeout_penalty=0.0,          # No punishment for timeout
+            cancel_penalty=0.0,
+            time_penalty=0.0,             # No time pressure
+            collision_penalty=0.0,        # No collision penalty - explore freely!
+            oscillation_penalty=0.0,      # No oscillation penalty
+            oscillation_window=4,
+            wait_penalty=-0.1,            # Only penalty: don't just sit there
+        )
+
+    @staticmethod
+    def precision_phase() -> "RewardConfig":
+        """
+        Config for later training: Add penalties to refine behavior.
+        Agent learns: efficient, precise navigation.
+        """
+        return RewardConfig(
+            progress_scale=5.0,
+            sustained_progress_bonus=0.5,
+            completion_bonus=10.0,
+            timeout_penalty=-5.0,         # Now penalize timeout
+            cancel_penalty=0.0,
+            time_penalty=-0.01,           # Add time pressure
+            collision_penalty=-0.1,       # Light collision penalty
+            oscillation_penalty=-0.05,    # Light oscillation penalty
+            oscillation_window=4,
+            wait_penalty=-0.2,            # Stronger WAIT penalty
+        )
 
 
 @dataclass
@@ -31,19 +78,23 @@ class RewardInfo:
     """Breakdown of reward components for debugging/logging."""
     total: float = 0.0
     progress: float = 0.0
+    sustained_bonus: float = 0.0
     completion: float = 0.0
     time: float = 0.0
     collision: float = 0.0
     oscillation: float = 0.0
+    wait: float = 0.0
 
     def to_dict(self) -> Dict[str, float]:
         return {
             "total": self.total,
             "progress": self.progress,
+            "sustained_bonus": self.sustained_bonus,
             "completion": self.completion,
             "time": self.time,
             "collision": self.collision,
             "oscillation": self.oscillation,
+            "wait": self.wait,
         }
 
 
@@ -72,12 +123,14 @@ class RewardCalculator:
         self._prev_distance: Optional[float] = None
         self._action_history: List[int] = []
         self._prev_npc_position: Optional[Tuple[float, float]] = None
+        self._progress_history: List[float] = []  # Track recent progress for sustained bonus
 
     def reset(self) -> None:
         """Reset state for new episode/intent."""
         self._prev_distance = None
         self._action_history.clear()
         self._prev_npc_position = None
+        self._progress_history.clear()
 
     def calculate(
         self,
@@ -111,6 +164,9 @@ class RewardCalculator:
             npc_x, npc_y, world_state, intent_state
         )
 
+        # 1b. Sustained progress bonus (if making progress consistently)
+        info.sustained_bonus = self._calculate_sustained_bonus(info.progress)
+
         # 2. Terminal rewards (completion/timeout)
         info.completion = self._calculate_terminal(intent_event)
 
@@ -125,6 +181,10 @@ class RewardCalculator:
         # 5. Oscillation penalty
         info.oscillation = self._calculate_oscillation(action)
 
+        # 6. WAIT penalty (action 4 = WAIT)
+        if action == 4:
+            info.wait = self.config.wait_penalty
+
         # Update history
         self._action_history.append(action)
         if len(self._action_history) > self.config.oscillation_window:
@@ -134,13 +194,32 @@ class RewardCalculator:
         # Sum up total
         info.total = (
             info.progress +
+            info.sustained_bonus +
             info.completion +
             info.time +
             info.collision +
-            info.oscillation
+            info.oscillation +
+            info.wait
         )
 
         return info
+
+    def _calculate_sustained_bonus(self, current_progress: float) -> float:
+        """Give bonus for making progress multiple steps in a row."""
+        # Track progress history
+        self._progress_history.append(current_progress)
+        if len(self._progress_history) > 3:
+            self._progress_history.pop(0)
+
+        # Need at least 3 steps of history
+        if len(self._progress_history) < 3:
+            return 0.0
+
+        # Bonus if all recent steps made positive progress
+        if all(p > 0 for p in self._progress_history):
+            return self.config.sustained_progress_bonus
+
+        return 0.0
 
     def _calculate_progress(
         self,
@@ -247,4 +326,5 @@ class RewardCalculator:
             "time_penalty": self.config.time_penalty,
             "collision_penalty": self.config.collision_penalty,
             "oscillation_penalty": self.config.oscillation_penalty,
+            "wait_penalty": self.config.wait_penalty,
         }

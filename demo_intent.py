@@ -1,4 +1,13 @@
 """
+LEGACY DEMO: Intent system with language embeddings.
+
+In the current architecture, RL receives structured goals (target_id),
+not language embeddings. This demo shows the embedding-based approach
+which is kept for backward compatibility.
+
+For the current architecture, see visualize_agent.py with --simple flag.
+
+Original description:
 Demo script to validate the intent system.
 Run from project root: python demo_intent.py
 

@@ -1,6 +1,14 @@
 """
-Demo: Two-Policy Architecture (Phase 1)
+LEGACY DEMO: Two-Policy Architecture (learned target selection + movement).
 
+In the current architecture:
+- Target resolution is DETERMINISTIC (not learned) via Validator/Resolver
+- RL only handles motor execution with structured goals (SimpleNPCEnv)
+
+This demo showed the experimental learned target selection approach.
+For the current architecture, use train_simple.py and visualize_agent.py.
+
+Original description:
 This demonstrates the learned target selection + movement architecture:
 1. Target Selection Policy: instruction embedding → object index
 2. Movement Policy: navigate to selected object

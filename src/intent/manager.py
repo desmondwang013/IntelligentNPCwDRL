@@ -23,7 +23,14 @@ class IntentManager:
     - Only one intent active at a time
     - New instructions preempt current intent
     - Tracks completion, timeout, and cancellation
-    - Provides embeddings for the policy
+    - Provides embeddings for the policy (legacy - see note below)
+
+    NOTE on embeddings:
+    In the current architecture (LLM → Target Resolver → RL Executor),
+    the RL agent receives structured goals, not embeddings. Embeddings are
+    still computed for backward compatibility with legacy training scripts,
+    but SimpleNPCEnv does not use them. The IntentManager is still used for
+    intent lifecycle tracking (completion criteria, timeout, etc.).
     """
 
     def __init__(
@@ -31,10 +38,14 @@ class IntentManager:
         embedder: Optional[TextEmbedder] = None,
         default_timeout_ticks: int = 480,
         stability_required: int = 3,
+        min_ticks_before_completion: int = 5,
     ):
         self.embedder = embedder or TextEmbedder()
         self.default_timeout_ticks = default_timeout_ticks
         self.stability_required = stability_required
+        # Minimum ticks that must pass before completion can trigger
+        # Prevents "spawn luck" where agent starts at target and immediately completes
+        self.min_ticks_before_completion = min_ticks_before_completion
 
         self._active_intent: Optional[Intent] = None
         self._intent_history: List[Intent] = []
@@ -128,8 +139,9 @@ class IntentManager:
                 progress=progress
             )
 
-        # Check completion criteria
-        if intent.criteria is not None:
+        # Check completion criteria (only after minimum ticks have passed)
+        # This prevents "spawn luck" completions where agent starts at target
+        if intent.criteria is not None and elapsed >= self.min_ticks_before_completion:
             if intent.criteria.check(npc_position, world_state):
                 intent.stability_counter += 1
                 if intent.stability_counter >= self.stability_required:
@@ -202,7 +214,9 @@ class IntentManager:
         current_dist = (dx * dx + dy * dy) ** 0.5
 
         # Estimate initial distance (rough heuristic: half the world diagonal)
-        max_dist = 64 * 1.414 / 2  # ~45 units
+        # Use actual world_size from state, with fallback for backward compatibility
+        world_size = world_state.get("world_size", 64)
+        max_dist = world_size * 1.414 / 2  # half the diagonal
 
         if current_dist >= max_dist:
             return 0.0

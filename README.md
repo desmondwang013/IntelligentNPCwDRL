@@ -6,9 +6,95 @@ A Python-based system for training an NPC that follows natural language instruct
 
 ## Project Overview
 
-This project builds the "brain" of an NPC that can understand and execute natural language commands like "go to the blue triangle", "pick up the red box", or "bring that to me". Instead of using scripted behaviors or rule-based parsing, the NPC learns how to interpret instructions through Deep Reinforcement Learning.
+This project builds the "brain" of an NPC that can understand and execute natural language commands like "go to the blue triangle", "pick up the red box", or "bring that to me". The architecture separates **language understanding** from **action execution**:
+
+- **LLM** handles language interpretation, ambiguity resolution, and dialogue
+- **RL agent** handles physical execution of structured commands (navigation, interaction)
+
+The RL agent does not parse language directly — it receives structured commands (e.g., `NAVIGATE target_id=obj_3`) and learns robust execution skills. This separation allows each component to do what it does best: LLMs excel at semantic understanding, while RL excels at continuous control and handling physical uncertainty.
 
 The system is designed to be **engine-agnostic** — the Python layer handles all the thinking, and a game engine (like Unity) can be plugged in later just for rendering.
+
+---
+
+## High-Level Architecture (End Goal)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  USER                                                           │
+│  "Go to the red box and pick it up"                             │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  LLM Layer                                                      │
+│  - Interprets natural language                                  │
+│  - Handles ambiguity ("which red box?")                         │
+│  - Asks clarifying questions if needed                          │
+│  - Decomposes complex instructions into steps                   │
+│                                                                 │
+│  Output: Structured ActionPlan JSON                             │
+│  {                                                              │
+│    "actions": [                                                 │
+│      {"type": "NAVIGATE", "target": "red box"},                 │
+│      {"type": "PICK_UP", "target": "red box"}                   │
+│    ]                                                            │
+│  }                                                              │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Validator + Resolver (Deterministic)                           │
+│  - Validates action types are supported                         │
+│  - Resolves "red box" → obj_3 (exact match on world state)      │
+│  - Checks target exists and is unambiguous                      │
+│  - Returns error/clarification request if invalid               │
+│                                                                 │
+│  Output: Resolved ActionPlan                                    │
+│  {                                                              │
+│    "actions": [                                                 │
+│      {"type": "NAVIGATE", "target_id": "obj_3"},                │
+│      {"type": "PICK_UP", "target_id": "obj_3"}                  │
+│    ]                                                            │
+│  }                                                              │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  RL Executor (Motor Skills)                                     │
+│  - Receives: action_type + target_id                            │
+│  - Observation: positions, obstacles, goal (NO language)        │
+│  - Executes physical actions (navigate, pick up, etc.)          │
+│  - Handles dynamics, collision avoidance, uncertainty           │
+│  - Reports success/failure                                      │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  World State                                                    │
+│  - Updated positions, inventory, etc.                           │
+│  - Outcome fed back to LLM for narration or replanning          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key Design Decisions
+
+1. **No language embeddings in RL observation** — The RL agent receives only structured goal information (target position, action type). Language understanding is fully delegated to the LLM.
+
+2. **Deterministic target resolution** — "red box" → `obj_3` is a lookup/match operation, not learned. This ensures predictable behavior and clear error handling.
+
+3. **Optional: Semantic parser** — If needed, a lightweight semantic layer can sit between LLM output and the validator to handle format variations. But the LLM should be prompted to output valid JSON directly.
+
+### Why RL Is Not Used for Language Parsing
+
+| Concern | LLM Approach | RL Approach |
+|---------|--------------|-------------|
+| Sample efficiency | Pre-trained on billions of tokens | Needs millions of examples per concept |
+| Ambiguity handling | Can ask clarifying questions | Silent failure or random guessing |
+| Generalization | Handles novel phrasings naturally | Requires retraining for new language |
+| Dialogue | Native capability | Not designed for multi-turn interaction |
+
+RL is powerful for **continuous control** — navigating around obstacles, timing interactions, handling physics. Language understanding is better left to models designed for it.
 
 ---
 
@@ -56,31 +142,39 @@ Training demo:
 
 ### Strategic Direction
 
-We're building for **Option B: Learned Understanding**.
+We're building for a **layered architecture** where each component handles what it does best:
 
-| Approach | Description | Scalability |
-|----------|-------------|:------------|
-| Option A (Coded) | Cosine similarity matches text → object | Limited. Every new action type = more code. |
-| **Option B (Learned)** | Agent learns to interpret embeddings | Scales. "grab" and "pick up" learned as similar. |
+| Layer | Responsibility | Technology |
+|-------|----------------|------------|
+| Language Understanding | Interpret user intent, handle ambiguity, dialogue | LLM (future) |
+| Target Resolution | Map descriptions → concrete IDs, validate | Deterministic/Supervised |
+| **Execution (Current Focus)** | Navigate, interact, handle physics | RL (PPO) |
+
+This is more scalable and robust than trying to make RL learn language semantics:
+- LLMs handle "grab" ≈ "pick up" naturally through pre-training
+- RL focuses purely on motor control and robust execution
+- Target resolution is a well-defined supervised problem
 
 **Phased Roadmap:**
 
 ```
 Phase 1 (Current):
-├── Architecture: Agent selects target + action
-├── Scope: Navigation only
-├── Reward: Automated (cosine similarity as proxy)
-└── Goal: Prove architecture works
+├── Scope: RL navigation execution only
+├── Input: Structured command with target_id
+├── Reward: Distance-based progress + completion
+└── Goal: Prove RL can learn robust navigation
 
 Phase 2:
+├── Add target resolution layer
 ├── Extend action space (pick up, drop, etc.)
-├── Same architecture, more action types
+├── RL receives structured commands for each action type
 └── Still automated reward
 
 Phase 3:
-├── Human/LLM reward signal
-├── Complex instructions ("bring X to Y")
-└── True semantic understanding
+├── Integrate LLM for language understanding
+├── LLM → Target Resolver → RL pipeline complete
+├── Complex instructions ("bring X to Y") decomposed by LLM
+└── Human feedback for edge cases
 ```
 
 ---
@@ -89,12 +183,20 @@ Phase 3:
 
 ```
 src/
-├── world/          # The game world simulation
-├── intent/         # Understanding what the user wants
-├── observation/    # What the NPC "sees" each moment
-├── runtime/        # Tying everything together
-├── reward/         # Learning signals for the NPC
-└── training/       # PPO training pipeline
+├── world/              # The game world simulation
+├── intent/             # Instruction management and completion tracking
+├── observation/        # What the NPC "sees" each moment
+│   ├── builder.py      # Legacy 575-dim observation (with embeddings)
+│   └── simple_builder.py  # Simplified 24-dim observation (recommended)
+├── runtime/            # Tying everything together
+├── reward/             # Learning signals (with phased configs)
+└── training/           # PPO training pipeline
+    ├── environment.py  # Legacy NPCEnv (575-dim)
+    ├── simple_env.py   # SimpleNPCEnv (24-dim, recommended)
+    └── curriculum_v2.py # Curriculum learning controller
+
+train_simple.py         # Main training script (recommended)
+visualize_agent.py      # Watch agent behavior in real-time
 ```
 
 ---
@@ -163,7 +265,9 @@ Spawner creates → User, NPC, [WorldObjects]
 
 ## Part 2: Intent (`src/intent/`)
 
-**What it does:** Manages user instructions and converts them into something the NPC can work with.
+**What it does:** Manages user instructions and tracks completion criteria.
+
+> **Note: This module is transitional.** In the current MVP, intent handling includes text embeddings passed directly to the RL agent. In the intended architecture, language understanding will be handled by an LLM layer, and this module will simplify to a structured command interface. The RL agent will eventually receive only structured goals (target_id, action_type), not raw language embeddings.
 
 ### Classes and How They Work
 
@@ -239,6 +343,28 @@ Every tick: IntentManager.update() checks CompletionCriteria
 ## Part 3: Observation (`src/observation/`)
 
 **What it does:** Packages everything the NPC needs to know into a single fixed-length array.
+
+### Two Observation Builders
+
+**`SimpleObservationBuilder` (Recommended — 24 dimensions)**
+
+This is the streamlined observation for the RL executor architecture. It provides ONLY structured goal information:
+
+| Component | Dimensions | Description |
+|-----------|------------|-------------|
+| NPC position | 2 | Normalized (x, y) |
+| Target position | 2 | Normalized (x, y) |
+| Direction to target | 2 | Unit vector pointing toward goal |
+| Distance to target | 1 | Normalized distance |
+| Target reached flag | 1 | 1.0 if within threshold |
+| Nearest obstacles | 15 | 5 obstacles × 3 (relative x, y, radius) |
+| Intent age | 1 | Normalized time since instruction |
+
+**No language embeddings.** The RL agent receives structured goals, not text. Language understanding is delegated to the LLM layer.
+
+**`ObservationBuilder` (Legacy — 575+ dimensions)**
+
+> **Note:** This builder includes language embeddings (384 dimensions) and was used for earlier experimentation. It remains available but is not recommended for the current architecture.
 
 ### Classes and How They Work
 
@@ -394,16 +520,49 @@ Runtime.step(action) pops events, processes them
 
 **What it does:** Provides the learning signal that tells the NPC how well it's doing.
 
+### Two-Phase Training Approach
+
+Training uses a **phased reward strategy** to help the agent learn effectively:
+
+**Phase 1: Exploration (No Penalties)**
+```
+Goal: Learn "moving toward target = good"
+- No collision penalty (explore freely)
+- No oscillation penalty
+- No time pressure
+- Only WAIT penalty (-0.1) to discourage inaction
+- Bigger completion bonus (+15.0)
+```
+
+**Phase 2: Precision (Penalties Added)**
+```
+Goal: Learn efficient, smooth navigation
+- Light collision penalty (-0.1)
+- Light oscillation penalty (-0.05)
+- Time pressure (-0.01/tick)
+- Stronger WAIT penalty (-0.2)
+```
+
+The transition happens automatically when:
+- Episode count reaches threshold (default: 2000), OR
+- Success rate exceeds threshold (default: 50%)
+
+This prevents the "frozen agent" problem where penalties kill exploration before the agent learns that movement is valuable.
+
 ### Classes and How They Work
 
 **`RewardConfig`** — Holds all the reward weights. Everything is configurable so you can tune the balance between different incentives:
-- `progress_scale` (1.0) — multiplier for distance-based progress
+- `progress_scale` (5.0) — multiplier for distance-based progress
 - `completion_bonus` (10.0) — reward for completing an intent
 - `timeout_penalty` (-5.0) — penalty for failing to complete in time
 - `cancel_penalty` (0.0) — penalty for user cancellation (not the NPC's fault)
 - `time_penalty` (-0.01) — small penalty each tick to encourage speed
 - `collision_penalty` (-0.1) — penalty for bumping into obstacles
 - `oscillation_penalty` (-0.05) — penalty for back-and-forth movement
+
+**Static factory methods:**
+- `RewardConfig.exploration_phase()` — returns config for Phase 1
+- `RewardConfig.precision_phase()` — returns config for Phase 2
 
 **`RewardInfo`** — A breakdown of all reward components for a single tick. Useful for debugging and understanding what the NPC is being rewarded/penalized for.
 
@@ -546,25 +705,38 @@ Trainer.save() → saves model to disk
 
 ## How It All Connects
 
+**Intended Architecture:**
 ```
 User says: "Go to the blue triangle"
               │
               ▼
         ┌─────────────┐
-        │   Intent    │  Converts text → 384-dim embedding
-        │   Manager   │  Tracks completion criteria
+        │    LLM      │  (Future) Interprets language
+        │   Layer     │  Outputs: NAVIGATE(target="blue triangle")
         └─────────────┘
               │
               ▼
         ┌─────────────┐
-        │ Observation │  Packages world + intent into 575 floats
+        │   Target    │  (Future) Resolves "blue triangle" → obj_7
+        │  Resolver   │  Validates unambiguous
+        └─────────────┘
+              │
+              ▼
+        ┌─────────────┐
+        │   Intent    │  Receives structured command
+        │   Manager   │  Tracks: target_id=obj_7, action=NAVIGATE
+        └─────────────┘
+              │
+              ▼
+        ┌─────────────┐
+        │ Observation │  Packages world state + goal info
         │   Builder   │
         └─────────────┘
               │
               ▼
         ┌─────────────┐
-        │   Policy    │  Neural network picks action (0-4)
-        │   (PPO)     │  Trained via stable-baselines3
+        │  RL Policy  │  Neural network picks action (0-4)
+        │   (PPO)     │  Executes motor skills
         └─────────────┘
               │
               ▼
@@ -583,31 +755,41 @@ User says: "Go to the blue triangle"
         └─────────────┘
 ```
 
+**Current MVP (Phase 1):** The LLM and Target Resolver layers are bypassed — the system directly provides `target_id` to the RL agent. This isolates RL training from language understanding.
+
 ---
 
 ## What's Built vs. What's Next
 
-**Done (Navigation Scaffold):**
+**Done (RL Execution Foundation):**
 - World simulation with movement and collision
 - Intent system with preemption and timeout
-- Text embedding with local transformer model
-- Observation vector construction
+- Simplified observation builder (24 dims, no embeddings)
+- Two-phase reward training (exploration → precision)
 - Runtime loop orchestration
 - Event system for user input
-- Reward computation with configurable weights
+- Reward computation with configurable weights and phased configs
 - PPO training pipeline with stable-baselines3
-- Gym-compatible environment wrapper
+- Gym-compatible environment wrapper (`SimpleNPCEnv`)
+- Curriculum learning for progressive difficulty (world size, success radius)
 - Model saving/loading and evaluation
+- Visualization tool for debugging agent behavior
 
-**Next Priority (Phase 1 Completion):**
-- Text → object parser (learned, not coded)
-- Reward based on correct object selection (not just arrival)
-- Agent outputs: target selection + movement action
+**Current Focus (Phase 1 — RL Navigation):**
+- Train robust navigation to structured targets
+- Two-phase training: exploration (no penalties) → precision (penalties added)
+- Curriculum from small worlds (8×8) to full size (64×64)
+- Prove RL execution layer works reliably
 
-**Future (Phase 2+):**
-- Extended action types (pick up, drop, attack, etc.)
-- Human/LLM feedback in reward loop
-- Complex multi-step instructions
+**Next Priority (Phase 2 — Target Resolution):**
+- Deterministic/supervised layer to resolve descriptions → target_id
+- Validate ambiguity before passing to RL
+- Extended action types (pick up, drop, etc.)
+
+**Future (Phase 3 — LLM Integration):**
+- LLM layer for language understanding and dialogue
+- LLM → Target Resolver → RL Executor pipeline
+- Complex multi-step instructions decomposed by LLM
 - Unity/game engine integration
 
 ---
@@ -633,25 +815,51 @@ python demo_training.py     # Test training pipeline (short run)
 
 ## Training
 
-**Quick test (verifies everything works):**
+### Simplified RL Executor (Recommended)
+
+Uses `SimpleNPCEnv` with 24-dim observation (no language embeddings):
+
 ```bash
-python demo_training.py
+# Full training with two-phase rewards and curriculum
+python train_simple.py --timesteps 1000000
+
+# Customize phase transition
+python train_simple.py --timesteps 1000000 \
+    --exploration-episodes 3000 \
+    --phase-success-threshold 0.6
+
+# Disable phased rewards (use default penalties from start)
+python train_simple.py --timesteps 1000000 --no-phased-rewards
+
+# Disable curriculum learning
+python train_simple.py --timesteps 1000000 --no-curriculum
 ```
 
-**Full training:**
+### Legacy Training (with embeddings)
+
+Uses `NPCEnv` with 575-dim observation:
+
 ```bash
-python train.py --timesteps 100000    # ~10-15 min on CPU
-python train.py --timesteps 500000    # Longer training for better results
+python train.py --timesteps 500000
 ```
 
-**Monitor with TensorBoard:**
+### Visualize Agent Behavior
+
 ```bash
-tensorboard --logdir logs
+# Watch trained simple agent
+python visualize_agent.py --simple --model models/simple/best/best_model.zip
+
+# Watch with greedy policy (for comparison)
+python visualize_agent.py --simple --greedy
+
+# Watch random baseline
+python visualize_agent.py --simple --random
 ```
 
-**Evaluate a trained model:**
+### Monitor with TensorBoard
+
 ```bash
-python train.py --eval-only --model-path models/ppo_npc_final
+tensorboard --logdir logs/simple
 ```
 
 ---
@@ -659,10 +867,11 @@ python train.py --eval-only --model-path models/ppo_npc_final
 ## Design Principles
 
 1. **Python is the brain** — all logic lives here, the game engine just renders
-2. **No scripted behaviors** — the NPC learns everything through RL
-3. **Learned understanding, not coded matching** — the agent learns to interpret language, we don't hardcode pattern-matching
-4. **Real-time, not episodic** — instructions can arrive anytime, even mid-task
-5. **One intent at a time** — new instructions preempt old ones (queue possible in future)
-6. **Deterministic completion** — success is measured by world state, not guesswork
-7. **Engine-agnostic** — swap Unity for Godot or anything else without retraining
-8. **Simple first, scale later** — start with navigation, add action types incrementally
+2. **Separation of concerns** — LLM for language understanding, RL for physical execution
+3. **RL as motor skill, not language parser** — the agent learns robust execution, not semantic interpretation
+4. **Deterministic validation** — target resolution validates commands before execution; ambiguity is caught, not guessed
+5. **Real-time, not episodic** — instructions can arrive anytime, even mid-task
+6. **One intent at a time** — new instructions preempt old ones (queue possible in future)
+7. **Deterministic completion** — success is measured by world state, not guesswork
+8. **Engine-agnostic** — swap Unity for Godot or anything else without retraining
+9. **Simple first, scale later** — start with navigation execution, add action types and LLM integration incrementally

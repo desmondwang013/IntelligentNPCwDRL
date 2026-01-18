@@ -1,3 +1,16 @@
+"""
+Runtime orchestrator for NPC simulation.
+
+NOTE: This runtime uses the legacy ObservationBuilder (with embeddings).
+SimpleNPCEnv uses its own SimpleObservationBuilder internally and does not
+rely on Runtime.get_observation() for training observations. The Runtime
+is still used by SimpleNPCEnv for world simulation, intent tracking, and
+reward calculation.
+
+For the current architecture (no embeddings in RL), see:
+- src/training/simple_env.py (SimpleNPCEnv)
+- src/observation/simple_builder.py (SimpleObservationBuilder)
+"""
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Dict, Any, List, Tuple
 import numpy as np
@@ -82,7 +95,10 @@ class Runtime:
         self._intent_manager = IntentManager(
             default_timeout_ticks=self.config.default_intent_timeout
         )
-        self._obs_builder = ObservationBuilder()
+        # Pass world size to observation builder for proper normalization
+        from src.observation.builder import ObservationConfig
+        obs_config = ObservationConfig(world_size=self._world.config.size)
+        self._obs_builder = ObservationBuilder(config=obs_config)
         self._event_queue = EventQueue()
         self._reward_calculator = RewardCalculator(
             config=self.config.reward_config

@@ -2,13 +2,24 @@ from typing import Dict, Optional
 import numpy as np
 import warnings
 import logging
+import os
 
-# Suppress the "UNEXPECTED" warnings from sentence-transformers model loading
+# Suppress noisy transformer warnings/output during model loading.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")  # Use cached model only, no online checks
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")  # Same for transformers
+
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message=".*UNEXPECTED.*")
 warnings.filterwarnings("ignore", message=".*position_ids.*")
+warnings.filterwarnings("ignore", message=".*Some weights of the model checkpoint.*")
+warnings.filterwarnings("ignore", message=".*You should probably TRAIN.*")
+warnings.filterwarnings("ignore", category=UserWarning, module=r"transformers.*")
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -43,19 +54,27 @@ class TextEmbedder:
                 "Install with: pip install sentence-transformers"
             )
 
-        # Suppress all the noisy output during model loading
-        import os
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        # Additional suppression for transformers logging.
+        try:
+            from transformers.utils import logging as hf_logging
+            hf_logging.set_verbosity_error()
+            hf_logging.disable_progress_bar()
+        except Exception:
+            pass
 
-        # Temporarily suppress stderr for clean loading
+        # Temporarily suppress both stdout and stderr for clean loading
+        # The "UNEXPECTED" warning goes to stdout
         import sys
         from io import StringIO
+        old_stdout = sys.stdout
         old_stderr = sys.stderr
+        sys.stdout = StringIO()
         sys.stderr = StringIO()
 
         try:
             self._model = SentenceTransformer(self.model_name, device="cpu")
         finally:
+            sys.stdout = old_stdout
             sys.stderr = old_stderr
 
         self._initialized = True

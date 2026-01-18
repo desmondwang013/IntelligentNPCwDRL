@@ -1,6 +1,16 @@
 """
-Observation builder for target selection policy.
+LEGACY: Observation builder for target selection policy.
 
+This was an experimental approach where RL learned to map embeddings → objects.
+In the current architecture, target resolution is DETERMINISTIC (not learned):
+- LLM outputs descriptive text
+- Validator/Resolver does exact match to find target_id
+- RL receives only structured goals (target_id, position)
+
+This file is kept for reference but is NOT part of the active architecture.
+See README.md for the current design: LLM → Target Resolver (deterministic) → RL Executor
+
+Original description:
 This builds an observation for deciding WHICH object to target,
 not for navigation. Key differences from the movement observation:
 1. All 10 objects included (not just 8 nearest)

@@ -1,12 +1,11 @@
 """
-LEGACY: Gym environment with language embeddings (575+ dim observation).
+Simplified Gym environment for RL executor training.
 
-For the current architecture, use `SimpleNPCEnv` from `simple_env.py` instead:
-- 24-dim observation (no embeddings)
-- Supports phased reward configs
-- Aligns with LLM → Target Resolver → RL Executor design
-
-This file is kept for backward compatibility with legacy training scripts.
+Uses SimpleObservationBuilder which provides ONLY structured goal information,
+no language embeddings. This aligns with the architecture where:
+- LLM handles language understanding
+- Target resolver provides concrete target_id
+- RL executor receives structured goals and executes motor skills
 """
 import random
 from typing import Optional, Tuple, Dict, Any, List
@@ -17,77 +16,73 @@ import numpy as np
 
 from src.runtime import Runtime, RuntimeConfig
 from src.world.world import WorldConfig
-from src.reward import RewardConfig
+from src.observation.simple_builder import SimpleObservationBuilder, SimpleObservationConfig
 from src.intent import IntentType
+from src.reward import RewardConfig
 
 
-class NPCEnv(gym.Env):
+class SimpleNPCEnv(gym.Env):
     """
-    Gym environment that wraps the NPC Runtime.
+    Simplified Gym environment for training the RL executor.
+
+    Key differences from NPCEnv:
+    - Uses SimpleObservationBuilder (24 dims instead of 621)
+    - No language embeddings in observation
+    - Agent receives: positions, direction to target, obstacles
+    - Designed for the "RL as motor skill executor" architecture
 
     Episode structure:
-    - Episode starts: world resets, random instruction given
+    - Episode starts: world resets, random target assigned
     - Episode step: NPC takes action, gets reward
-    - Episode ends: intent completes, times out, or max steps reached
+    - Episode ends: reaches target, times out, or max steps reached
 
     Action space: Discrete(5) - UP, DOWN, LEFT, RIGHT, WAIT
-                  (SPEAK excluded for MVP simplicity)
-
-    Observation space: Box(621,) - the observation vector from ObservationBuilder
-                       (fixed dimension regardless of world_size for curriculum learning)
+    Observation space: Box(24,) - structured goal information only
     """
 
     metadata = {"render_modes": ["human"]}
 
     def __init__(
         self,
-        runtime_config: Optional[RuntimeConfig] = None,
-        world_config: Optional[WorldConfig] = None,
         world_size: int = 64,
         max_steps_per_episode: int = 500,
-        instruction_templates: Optional[List[str]] = None,
         seed: Optional[int] = None,
         distance_threshold: float = 2.0,
         min_spawn_distance: Optional[float] = None,
+        num_obstacles_in_obs: int = 5,
+        reward_config: Optional[RewardConfig] = None,
     ):
         super().__init__()
 
-        self._runtime_config = runtime_config or RuntimeConfig()
         self._world_size = world_size
         self._distance_threshold = distance_threshold
-        # Minimum distance between NPC and target at episode start
-        # Prevents "spawn cheating" where agent starts already at target
-        # Default: 3x the success threshold to ensure meaningful navigation
         self._min_spawn_distance = min_spawn_distance
-        # Create world config with specified size
-        if world_config is not None:
-            self._world_config = world_config
-        else:
-            self._world_config = WorldConfig(size=world_size)
         self._max_steps = max_steps_per_episode
         self._seed = seed
+        self._reward_config = reward_config
 
-        # Instruction templates for generating random tasks
-        self._instruction_templates = instruction_templates or [
-            "Go to the {color} {shape}",
-            "Move to the {color} {shape}",
-            "Walk to the {color} {shape}",
-        ]
+        # Create configs
+        self._runtime_config = RuntimeConfig(reward_config=reward_config)
+        self._world_config = WorldConfig(size=world_size)
 
-        # Create runtime (will be reset in reset())
+        # Create simplified observation builder
+        self._obs_config = SimpleObservationConfig(
+            world_size=world_size,
+            num_obstacles=num_obstacles_in_obs,
+        )
+        self._obs_builder = SimpleObservationBuilder(config=self._obs_config)
+
+        # Runtime and state (will be reset in reset())
         self._runtime: Optional[Runtime] = None
         self._current_step = 0
         self._current_target_id: Optional[str] = None
         self._rng = random.Random(seed)
 
         # Define spaces
-        # Action: 5 discrete actions (excluding SPEAK for MVP)
-        self.action_space = spaces.Discrete(5)
+        self.action_space = spaces.Discrete(5)  # UP, DOWN, LEFT, RIGHT, WAIT
 
-        # Observation: 621-dim vector (fixed for curriculum learning)
-        # We need to initialize runtime briefly to get observation dim
-        temp_runtime = Runtime(config=self._runtime_config, world_config=self._world_config)
-        obs_dim = temp_runtime.observation_dim
+        # Simplified observation space
+        obs_dim = self._obs_builder.observation_dim
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -110,43 +105,58 @@ class NPCEnv(gym.Env):
         """Minimum distance between NPC and target at episode start."""
         if self._min_spawn_distance is not None:
             return self._min_spawn_distance
-        # Default: success_radius + margin (at least 2.0 margin, or 50% of radius)
-        # This ensures the agent MUST move to succeed - no spawn luck
+        # Default: success_radius + margin
         margin = max(2.0, self._distance_threshold * 0.5)
         return self._distance_threshold + margin
 
     def set_world_size(self, new_size: int) -> None:
-        """
-        Update world size for curriculum learning.
-        Takes effect on next reset().
-        """
+        """Update world size for curriculum learning."""
         self._world_size = new_size
         self._world_config = WorldConfig(size=new_size)
+        self._obs_config = SimpleObservationConfig(
+            world_size=new_size,
+            num_obstacles=self._obs_config.num_obstacles,
+        )
+        self._obs_builder = SimpleObservationBuilder(config=self._obs_config)
 
     def set_distance_threshold(self, threshold: float) -> None:
-        """
-        Update distance threshold for success (curriculum learning).
-        Takes effect on next reset().
-        """
+        """Update distance threshold for success (curriculum learning)."""
         self._distance_threshold = threshold
+
+    def set_reward_config(self, config: RewardConfig) -> None:
+        """Update reward config for phased training."""
+        self._reward_config = config
+        self._runtime_config = RuntimeConfig(reward_config=config)
+
+    @property
+    def reward_config(self) -> Optional[RewardConfig]:
+        """Current reward configuration."""
+        return self._reward_config
+
+    def _get_observation(self) -> np.ndarray:
+        """Build observation using SimpleObservationBuilder."""
+        state = self._runtime.get_state()
+        world_state = state["world"]
+        intent_age = self._runtime.intent_manager.get_intent_age(self._runtime.tick)
+
+        return self._obs_builder.build(
+            world_state=world_state,
+            target_id=self._current_target_id,
+            intent_age_ticks=intent_age,
+            distance_threshold=self._distance_threshold,
+        )
 
     def reset(
         self,
         seed: Optional[int] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
-        """
-        Reset the environment for a new episode.
-
-        Returns:
-            observation: Initial observation
-            info: Additional info dict
-        """
+        """Reset the environment for a new episode."""
         if seed is not None:
             self._rng = random.Random(seed)
             self._seed = seed
 
-        # Create fresh runtime with random world seed
+        # Create fresh runtime
         world_seed = self._rng.randint(0, 1000000)
         self._runtime_config.world_seed = world_seed
         self._runtime = Runtime(
@@ -156,15 +166,16 @@ class NPCEnv(gym.Env):
 
         self._current_step = 0
 
-        # Generate and submit a random instruction
+        # Select random target and submit instruction
         self._submit_random_instruction()
 
-        # Get initial observation
-        obs = self._runtime.get_observation()
+        # Get observation using simplified builder
+        obs = self._get_observation()
 
         info = {
             "target_id": self._current_target_id,
-            "instruction": self._runtime.intent_manager.active_intent.text if self._runtime.intent_manager.active_intent else None,
+            "world_size": self._world_size,
+            "observation_dim": self._obs_builder.observation_dim,
         }
 
         return obs, info
@@ -172,39 +183,25 @@ class NPCEnv(gym.Env):
     def step(
         self, action: int
     ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
-        """
-        Execute one step in the environment.
-
-        Args:
-            action: Action ID (0-4: UP, DOWN, LEFT, RIGHT, WAIT)
-
-        Returns:
-            observation: New observation
-            reward: Reward for this step
-            terminated: Whether episode ended (intent completed/failed)
-            truncated: Whether episode was cut short (max steps)
-            info: Additional info
-        """
+        """Execute one step in the environment."""
         if self._runtime is None:
             raise RuntimeError("Environment not initialized. Call reset() first.")
 
-        # Execute action
+        # Execute action (Runtime handles world update and reward)
         result = self._runtime.step(action)
         self._current_step += 1
 
-        # Get observation and reward
-        obs = result.observation
+        # Get observation using simplified builder
+        obs = self._get_observation()
         reward = result.reward
 
         # Check termination conditions
         terminated = False
         truncated = False
 
-        # Check if intent ended (completed or timeout)
         if not result.intent_state.get("has_intent", False):
             terminated = True
 
-        # Check max steps
         if self._current_step >= self._max_steps:
             truncated = True
 
@@ -216,7 +213,6 @@ class NPCEnv(gym.Env):
             "target_id": self._current_target_id,
         }
 
-        # Add termination reason
         for event in result.events:
             if event.event_type.name in ("INTENT_COMPLETED", "INTENT_TIMEOUT", "INTENT_CANCELED"):
                 info["termination_reason"] = event.event_type.name
@@ -224,14 +220,12 @@ class NPCEnv(gym.Env):
         return obs, reward, terminated, truncated, info
 
     def _submit_random_instruction(self) -> None:
-        """Generate and submit a random instruction."""
-        # Get world state to pick a random target object
+        """Select a random target and submit instruction."""
         state = self._runtime.get_state()
         objects = state["world"]["objects"]
         npc_pos = state["world"]["npc"]["position"]
 
-        # Filter objects to those beyond minimum spawn distance
-        # This prevents "spawn cheating" where agent starts at target
+        # Filter objects beyond minimum spawn distance
         min_dist = self.min_spawn_distance
         valid_targets = []
         for obj in objects:
@@ -256,18 +250,13 @@ class NPCEnv(gym.Env):
             objects_with_dist.sort(key=lambda x: x[1], reverse=True)
             valid_targets = [objects_with_dist[0][0]]
 
-        # Pick a random object from valid targets
+        # Pick random target
         target = self._rng.choice(valid_targets)
         self._current_target_id = target["entity_id"]
 
-        # Generate instruction text
-        template = self._rng.choice(self._instruction_templates)
-        instruction = template.format(
-            color=target["color"],
-            shape=target["shape"],
-        )
+        # Submit instruction (text is just for logging, not used by RL)
+        instruction = f"Navigate to {target['color']} {target['shape']}"
 
-        # Submit instruction
         self._runtime.submit_instruction(
             text=instruction,
             intent_type=IntentType.MOVE_TO_OBJECT,
@@ -275,22 +264,29 @@ class NPCEnv(gym.Env):
             distance_threshold=self._distance_threshold,
         )
 
-        # Process the instruction (advances one tick)
-        self._runtime.step(4)  # WAIT action to process the event
+        # Process the instruction
+        self._runtime.step(4)  # WAIT action to process
 
     def render(self) -> None:
-        """Render the environment (text-based for now)."""
+        """Render the environment (text-based)."""
         if self._runtime is None:
             print("Environment not initialized.")
             return
 
         state = self._runtime.get_state()
         npc = state["world"]["npc"]["position"]
-        intent = state["intent"]
 
-        print(f"Tick: {state['tick']}, NPC: ({npc['x']:.1f}, {npc['y']:.1f})")
-        if intent.get("has_intent"):
-            print(f"Intent: {intent['intent']['text']}")
+        # Find target position
+        target_pos = None
+        for obj in state["world"]["objects"]:
+            if obj["entity_id"] == self._current_target_id:
+                target_pos = obj["position"]
+                break
+
+        print(f"Step {self._current_step}, NPC: ({npc['x']:.1f}, {npc['y']:.1f})")
+        if target_pos:
+            dist = np.sqrt((npc['x'] - target_pos['x'])**2 + (npc['y'] - target_pos['y'])**2)
+            print(f"Target: ({target_pos['x']:.1f}, {target_pos['y']:.1f}), Distance: {dist:.2f}")
 
     def close(self) -> None:
         """Clean up resources."""

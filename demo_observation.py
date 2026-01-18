@@ -1,4 +1,13 @@
 """
+LEGACY DEMO: Observation builder with embeddings (575+ dimensions).
+
+In the current architecture, use SimpleObservationBuilder (24 dimensions)
+which contains only structured goal information, no embeddings.
+
+For the current architecture, see SimpleObservationBuilder in:
+  src/observation/simple_builder.py
+
+Original description:
 Demo script to validate the observation builder.
 Run from project root: python demo_observation.py
 

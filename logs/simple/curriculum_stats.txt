@@ -1,0 +1,8 @@
+total_episodes: 1416
+in_warmup: False
+warmup_remaining: 0
+success_rate: 0.255
+success_radius: 3.584
+sampling_weights: {8: 0.85, 16: 0.1, 32: 0.04, 64: 0.01}
+per_size_success: {8: 0.32, 16: 0.38, 32: 0.32653061224489793, 64: 0.35294117647058826}
+window_fill: 200
