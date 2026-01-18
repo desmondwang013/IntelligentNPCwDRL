@@ -17,6 +17,7 @@ class SimpleObservationConfig:
     """Configuration for simplified observation vector."""
     world_size: int = 64
     num_obstacles: int = 5  # Number of nearest obstacles to include
+    include_action_feedback: bool = True  # Include previous action and blocked flag
 
     @property
     def max_distance(self) -> float:
@@ -26,6 +27,9 @@ class SimpleObservationConfig:
 
 # Per-obstacle features: relative position (2) + collision radius (1)
 FEATURES_PER_OBSTACLE = 3
+
+# Number of actions (UP, DOWN, LEFT, RIGHT, WAIT)
+NUM_ACTIONS = 5
 
 
 class SimpleObservationBuilder:
@@ -37,6 +41,7 @@ class SimpleObservationBuilder:
     - Where is my target?
     - What direction should I go?
     - What obstacles are nearby?
+    - What did I try last, and did it work? (action feedback)
 
     NO language embeddings - that's the LLM's job.
 
@@ -48,8 +53,11 @@ class SimpleObservationBuilder:
     - Target reached flag (1): 1.0 if within threshold, else 0.0
     - Nearest obstacles (5 × 3 = 15): relative position + radius
     - Intent age (1): normalized, for time pressure signal
+    - Previous action (5): one-hot encoding of last action taken
+    - Action blocked (1): 1.0 if last movement action was blocked
 
-    Total: 2 + 2 + 2 + 1 + 1 + 15 + 1 = 24 floats
+    Total without action feedback: 24 floats
+    Total with action feedback: 24 + 5 + 1 = 30 floats
     """
 
     def __init__(self, config: Optional[SimpleObservationConfig] = None):
@@ -60,7 +68,7 @@ class SimpleObservationBuilder:
     def observation_dim(self) -> int:
         """Total dimension of the observation vector."""
         if self._observation_dim is None:
-            self._observation_dim = (
+            base_dim = (
                 2 +  # NPC position
                 2 +  # Target position
                 2 +  # Direction to target
@@ -69,6 +77,9 @@ class SimpleObservationBuilder:
                 self.config.num_obstacles * FEATURES_PER_OBSTACLE +  # Obstacles
                 1    # Intent age
             )
+            if self.config.include_action_feedback:
+                base_dim += NUM_ACTIONS + 1  # One-hot action + blocked flag
+            self._observation_dim = base_dim
         return self._observation_dim
 
     def build(
@@ -78,6 +89,8 @@ class SimpleObservationBuilder:
         intent_age_ticks: int = 0,
         distance_threshold: float = 2.0,
         max_intent_age_ticks: int = 960,
+        previous_action: Optional[int] = None,
+        action_blocked: bool = False,
     ) -> np.ndarray:
         """
         Build the observation vector from world state and target information.
@@ -88,9 +101,11 @@ class SimpleObservationBuilder:
             intent_age_ticks: How long the current intent has been active
             distance_threshold: Distance at which target is considered "reached"
             max_intent_age_ticks: For normalizing intent age
+            previous_action: The last action taken (0-4), None if first step
+            action_blocked: True if last movement action was blocked by collision
 
         Returns:
-            Fixed-length numpy array (24 floats)
+            Fixed-length numpy array (24 or 30 floats depending on config)
         """
         obs_parts: List[np.ndarray] = []
         world_size = self.config.world_size
@@ -156,6 +171,18 @@ class SimpleObservationBuilder:
         # 7. Intent age (normalized)
         normalized_age = min(intent_age_ticks / max_intent_age_ticks, 1.0)
         obs_parts.append(np.array([normalized_age], dtype=np.float32))
+
+        # 8. Action feedback (if enabled)
+        if self.config.include_action_feedback:
+            # One-hot encoding of previous action
+            action_one_hot = np.zeros(NUM_ACTIONS, dtype=np.float32)
+            if previous_action is not None and 0 <= previous_action < NUM_ACTIONS:
+                action_one_hot[previous_action] = 1.0
+            obs_parts.append(action_one_hot)
+
+            # Action blocked flag
+            blocked_flag = 1.0 if action_blocked else 0.0
+            obs_parts.append(np.array([blocked_flag], dtype=np.float32))
 
         # Concatenate all parts
         observation = np.concatenate(obs_parts)
@@ -233,31 +260,48 @@ class SimpleObservationBuilder:
         """
         n_obs = self.config.num_obstacles
         obs_features = FEATURES_PER_OBSTACLE
+        intent_age_start = 8 + n_obs * obs_features
+
+        structure = {
+            "npc_position": {"start": 0, "size": 2, "desc": "NPC x,y normalized"},
+            "target_position": {"start": 2, "size": 2, "desc": "Target x,y normalized"},
+            "direction_to_target": {"start": 4, "size": 2, "desc": "Unit vector toward target"},
+            "distance_to_target": {"start": 6, "size": 1, "desc": "Normalized distance"},
+            "target_reached": {"start": 7, "size": 1, "desc": "1.0 if within threshold"},
+            "obstacles": {
+                "start": 8,
+                "size": n_obs * obs_features,
+                "per_obstacle": obs_features,
+                "num_obstacles": n_obs,
+                "desc": "Nearest obstacles (rel_pos + radius)",
+            },
+            "intent_age": {
+                "start": intent_age_start,
+                "size": 1,
+                "desc": "Normalized time elapsed",
+            },
+        }
+
+        if self.config.include_action_feedback:
+            action_start = intent_age_start + 1
+            structure["previous_action"] = {
+                "start": action_start,
+                "size": NUM_ACTIONS,
+                "desc": "One-hot encoding of last action (UP/DOWN/LEFT/RIGHT/WAIT)",
+            }
+            structure["action_blocked"] = {
+                "start": action_start + NUM_ACTIONS,
+                "size": 1,
+                "desc": "1.0 if last movement action was blocked by collision",
+            }
 
         return {
             "total_dim": self.observation_dim,
-            "structure": {
-                "npc_position": {"start": 0, "size": 2, "desc": "NPC x,y normalized"},
-                "target_position": {"start": 2, "size": 2, "desc": "Target x,y normalized"},
-                "direction_to_target": {"start": 4, "size": 2, "desc": "Unit vector toward target"},
-                "distance_to_target": {"start": 6, "size": 1, "desc": "Normalized distance"},
-                "target_reached": {"start": 7, "size": 1, "desc": "1.0 if within threshold"},
-                "obstacles": {
-                    "start": 8,
-                    "size": n_obs * obs_features,
-                    "per_obstacle": obs_features,
-                    "num_obstacles": n_obs,
-                    "desc": "Nearest obstacles (rel_pos + radius)",
-                },
-                "intent_age": {
-                    "start": 8 + n_obs * obs_features,
-                    "size": 1,
-                    "desc": "Normalized time elapsed",
-                },
-            },
+            "structure": structure,
             "design_rationale": (
                 "This observation contains ONLY structured goal information. "
                 "No language embeddings - the LLM handles language understanding, "
-                "and the RL executor only needs to know WHERE to go and WHAT to avoid."
+                "and the RL executor only needs to know WHERE to go and WHAT to avoid. "
+                "Action feedback helps the agent learn to navigate around obstacles."
             ),
         }

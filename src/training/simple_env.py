@@ -78,6 +78,11 @@ class SimpleNPCEnv(gym.Env):
         self._current_target_id: Optional[str] = None
         self._rng = random.Random(seed)
 
+        # Action feedback tracking
+        self._previous_action: Optional[int] = None
+        self._action_blocked: bool = False
+        self._previous_npc_pos: Optional[Tuple[float, float]] = None
+
         # Define spaces
         self.action_space = spaces.Discrete(5)  # UP, DOWN, LEFT, RIGHT, WAIT
 
@@ -144,6 +149,8 @@ class SimpleNPCEnv(gym.Env):
             target_id=self._current_target_id,
             intent_age_ticks=intent_age,
             distance_threshold=self._distance_threshold,
+            previous_action=self._previous_action,
+            action_blocked=self._action_blocked,
         )
 
     def reset(
@@ -166,6 +173,11 @@ class SimpleNPCEnv(gym.Env):
 
         self._current_step = 0
 
+        # Reset action feedback state
+        self._previous_action = None
+        self._action_blocked = False
+        self._previous_npc_pos = None
+
         # Select random target and submit instruction
         self._submit_random_instruction()
 
@@ -187,11 +199,27 @@ class SimpleNPCEnv(gym.Env):
         if self._runtime is None:
             raise RuntimeError("Environment not initialized. Call reset() first.")
 
+        # Get NPC position BEFORE action (for blocked detection)
+        state_before = self._runtime.get_state()
+        npc_pos_before = state_before["world"]["npc"]["position"]
+        pos_before = (npc_pos_before["x"], npc_pos_before["y"])
+
         # Execute action (Runtime handles world update and reward)
         result = self._runtime.step(action)
         self._current_step += 1
 
-        # Get observation using simplified builder
+        # Get NPC position AFTER action
+        state_after = self._runtime.get_state()
+        npc_pos_after = state_after["world"]["npc"]["position"]
+        pos_after = (npc_pos_after["x"], npc_pos_after["y"])
+
+        # Determine if action was blocked (movement action but position didn't change)
+        is_movement_action = action in (0, 1, 2, 3)  # UP, DOWN, LEFT, RIGHT
+        position_changed = (pos_before[0] != pos_after[0] or pos_before[1] != pos_after[1])
+        self._action_blocked = is_movement_action and not position_changed
+        self._previous_action = action
+
+        # Get observation using simplified builder (now includes action feedback)
         obs = self._get_observation()
         reward = result.reward
 
