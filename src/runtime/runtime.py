@@ -1,13 +1,11 @@
 """
 Runtime orchestrator for NPC simulation.
 
-NOTE: This runtime uses the legacy ObservationBuilder (with embeddings).
-SimpleNPCEnv uses its own SimpleObservationBuilder internally and does not
-rely on Runtime.get_observation() for training observations. The Runtime
-is still used by SimpleNPCEnv for world simulation, intent tracking, and
-reward calculation.
+Handles world simulation, intent tracking, and reward calculation.
+SimpleNPCEnv and other environments use their own observation builders;
+this Runtime no longer builds observations internally.
 
-For the current architecture (no embeddings in RL), see:
+For the current architecture, see:
 - src/training/simple_env.py (SimpleNPCEnv)
 - src/observation/simple_builder.py (SimpleObservationBuilder)
 """
@@ -17,9 +15,7 @@ import numpy as np
 
 from src.world import World
 from src.world.world import WorldConfig, Action
-from src.intent import IntentManager, IntentType
-from src.intent.intent import CompletionCriteria
-from src.observation import ObservationBuilder
+from src.controller import IntentManager, IntentType, CompletionCriteria
 from src.reward import RewardCalculator, RewardConfig, RewardInfo
 from .events import Event, EventType, EventQueue
 
@@ -38,7 +34,6 @@ class RuntimeConfig:
 class StepResult:
     """Result of a single runtime step."""
     tick: int
-    observation: np.ndarray
     world_state: Dict[str, Any]
     intent_state: Dict[str, Any]
     events: List[Event]
@@ -50,7 +45,6 @@ class StepResult:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "tick": self.tick,
-            "observation_shape": self.observation.shape,
             "world_state": self.world_state,
             "intent_state": self.intent_state,
             "events": [e.to_dict() for e in self.events],
@@ -63,24 +57,24 @@ class StepResult:
 
 class Runtime:
     """
-    Main runtime loop that orchestrates World, IntentManager, and ObservationBuilder.
+    Main runtime loop that orchestrates World, IntentManager, and rewards.
 
     Flow per tick:
     1. Process pending user events (new instructions, cancellations, movement)
-    2. Get observation for policy
-    3. Policy selects action (external)
-    4. Apply action to world
-    5. Update intent state (check completion/timeout)
-    6. Return step result
+    2. Apply action to world
+    3. Update intent state (check completion/timeout)
+    4. Calculate reward
+    5. Return step result
+
+    Note: Observation building is handled externally by the environment.
+    Use SimpleNPCEnv with SimpleObservationBuilder for training.
 
     Usage:
         runtime = Runtime()
-        obs = runtime.get_observation()
 
         while running:
-            action = policy(obs)  # external policy
             result = runtime.step(action)
-            obs = result.observation
+            # Build observation externally using SimpleObservationBuilder
     """
 
     def __init__(
@@ -95,10 +89,6 @@ class Runtime:
         self._intent_manager = IntentManager(
             default_timeout_ticks=self.config.default_intent_timeout
         )
-        # Pass world size to observation builder for proper normalization
-        from src.observation.builder import ObservationConfig
-        obs_config = ObservationConfig(world_size=self._world.config.size)
-        self._obs_builder = ObservationBuilder(config=obs_config)
         self._event_queue = EventQueue()
         self._reward_calculator = RewardCalculator(
             config=self.config.reward_config
@@ -125,17 +115,12 @@ class Runtime:
         return self._event_queue
 
     @property
-    def observation_dim(self) -> int:
-        return self._obs_builder.observation_dim
-
-    @property
     def reward_calculator(self) -> RewardCalculator:
         return self._reward_calculator
 
-    def reset(self, seed: Optional[int] = None) -> np.ndarray:
+    def reset(self, seed: Optional[int] = None) -> None:
         """
         Reset the runtime to initial state.
-        Returns the initial observation.
         """
         self._world.reset(seed=seed)
 
@@ -146,25 +131,6 @@ class Runtime:
         self._step_history.clear()
         self._tick_events.clear()
         self._reward_calculator.reset()
-
-        return self.get_observation()
-
-    def get_observation(self) -> np.ndarray:
-        """Get the current observation for the policy."""
-        world_state = self._world.get_state()
-        intent_embedding = self._intent_manager.get_current_embedding()
-        intent_age = self._intent_manager.get_intent_age(self.tick)
-
-        focus_hint = None
-        if self._intent_manager.active_intent:
-            focus_hint = self._intent_manager.active_intent.focus_hint
-
-        return self._obs_builder.build(
-            world_state=world_state,
-            intent_embedding=intent_embedding,
-            intent_age_ticks=intent_age,
-            focus_hint=focus_hint,
-        )
 
     def step(
         self,
@@ -179,7 +145,7 @@ class Runtime:
             npc_speech: Optional speech content if action is SPEAK
 
         Returns:
-            StepResult with observation, state, reward, and events
+            StepResult with state, reward, and events
         """
         self._tick_events.clear()
 
@@ -225,13 +191,9 @@ class Runtime:
             intent_event=intent_event,
         )
 
-        # 7. Build observation
-        observation = self.get_observation()
-
-        # 8. Build result
+        # 7. Build result
         result = StepResult(
             tick=self.tick,
-            observation=observation,
             world_state=world_state,
             intent_state=intent_state,
             events=list(self._tick_events),

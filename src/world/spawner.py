@@ -10,6 +10,7 @@ from .entities import (
     ObjectColor,
     ObjectShape,
     ObjectSize,
+    Enemy,
 )
 
 
@@ -80,6 +81,21 @@ class Spawner:
             shape=shape,
             size=size,
         )
+
+    def spawn_enemy(
+        self, existing_positions: List[Position], enemy_id: str = "enemy_0",
+        enemy_type: str = "enemy"
+    ) -> Optional[Enemy]:
+        """Spawn an enemy at a valid position. Returns None if no valid position found."""
+        try:
+            pos = self._find_valid_position(existing_positions)
+            return Enemy(
+                position=pos,
+                entity_id=enemy_id,
+                enemy_type=enemy_type,
+            )
+        except RuntimeError:
+            return None
 
     def spawn_all(
         self, num_objects: int = 10

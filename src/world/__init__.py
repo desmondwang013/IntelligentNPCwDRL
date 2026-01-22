@@ -1,3 +1,3 @@
-from .entities import NPC, User, WorldObject
-from .world import World, WorldConfig
+from .entities import NPC, User, WorldObject, Enemy, CombatStyle
+from .world import World, WorldConfig, Action
 from .spawner import Spawner

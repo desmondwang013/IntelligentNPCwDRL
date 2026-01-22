@@ -17,7 +17,7 @@ import numpy as np
 from src.runtime import Runtime, RuntimeConfig
 from src.world.world import WorldConfig
 from src.observation.simple_builder import SimpleObservationBuilder, SimpleObservationConfig
-from src.intent import IntentType
+from src.controller import IntentType
 from src.reward import RewardConfig
 
 

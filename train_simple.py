@@ -211,7 +211,7 @@ def main():
     print("=" * 60)
     print("SIMPLIFIED RL EXECUTOR TRAINING")
     print("=" * 60)
-    print(f"Observation: 24 dimensions (NO language embeddings)")
+    print(f"Observation: 30 dimensions (NO language embeddings, WITH action feedback)")
     print(f"Architecture: RL receives structured goals only")
     print(f"Timesteps: {args.timesteps:,}")
     print(f"Parallel envs: {args.n_envs}")

@@ -8,7 +8,7 @@ no language embeddings. This aligns with the architecture where:
 - RL executor receives structured goals and executes motor skills
 """
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import numpy as np
 
 
@@ -85,12 +85,13 @@ class SimpleObservationBuilder:
     def build(
         self,
         world_state: Dict[str, Any],
-        target_id: str,
+        target_id: Optional[str] = None,
         intent_age_ticks: int = 0,
         distance_threshold: float = 2.0,
         max_intent_age_ticks: int = 960,
         previous_action: Optional[int] = None,
         action_blocked: bool = False,
+        target_position: Optional[Tuple[float, float]] = None,
     ) -> np.ndarray:
         """
         Build the observation vector from world state and target information.
@@ -103,6 +104,8 @@ class SimpleObservationBuilder:
             max_intent_age_ticks: For normalizing intent age
             previous_action: The last action taken (0-4), None if first step
             action_blocked: True if last movement action was blocked by collision
+            target_position: Direct (x, y) position override (for waypoint navigation)
+                            If provided, target_id is ignored.
 
         Returns:
             Fixed-length numpy array (24 or 30 floats depending on config)
@@ -114,8 +117,14 @@ class SimpleObservationBuilder:
         npc_pos = world_state["npc"]["position"]
         npc_x, npc_y = npc_pos["x"], npc_pos["y"]
 
-        # Find target position
-        target_x, target_y = self._get_target_position(world_state, target_id)
+        # Find target position (direct override or lookup by ID)
+        if target_position is not None:
+            target_x, target_y = target_position
+        elif target_id is not None:
+            target_x, target_y = self._get_target_position(world_state, target_id)
+        else:
+            # Fallback to center if neither provided
+            target_x, target_y = world_size / 2, world_size / 2
 
         # 1. NPC position (normalized)
         obs_parts.append(np.array([
@@ -248,7 +257,7 @@ class SimpleObservationBuilder:
         features = [
             (ox - npc_x) / world_size,
             (oy - npc_y) / world_size,
-            obj["collision_radius"] / 2.0,  # Normalize (max ~1.5)
+            obj["collision_radius"] / 0.5,  # Normalize (max 0.2 -> 0.4)
         ]
 
         return np.array(features, dtype=np.float32)

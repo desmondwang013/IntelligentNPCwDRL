@@ -5,7 +5,7 @@ Run from project root: python demo_reward.py
 from src.runtime import Runtime, RuntimeConfig
 from src.reward import RewardConfig
 from src.world.world import Action
-from src.intent import IntentType
+from src.controller import IntentType
 
 
 def main():

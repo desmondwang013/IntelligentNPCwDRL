@@ -1,3 +1,1 @@
-from .builder import ObservationBuilder, ObservationConfig
 from .simple_builder import SimpleObservationBuilder, SimpleObservationConfig
-from .target_selection_builder import TargetSelectionObsBuilder, TargetSelectionObsConfig
