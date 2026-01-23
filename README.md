@@ -69,7 +69,7 @@ The LLM never accesses world state directly. Action modules never speak to users
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │  Navigation Module (Hybrid: A* + RL)                    │    │
-│  │  - Receives: target_id (resolved by Gateway)            │    │
+│  │  - Receives: target_id (res python train_combat.py --timesteps 500000 --combat-style balancedolved by Gateway)            │    │
 │  │  - A* pathfinder computes waypoints                     │    │
 │  │  - RL Executor follows waypoints (local control)        │    │
 │  │  - Returns: success/fail + metrics                      │    │

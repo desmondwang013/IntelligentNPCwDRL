@@ -47,6 +47,7 @@ class CombatEnv(gym.Env):
         obs_config: Optional[CombatObservationConfig] = None,
         render_mode: Optional[str] = None,
         seed: Optional[int] = None,
+        close_spawn: bool = False,
     ):
         super().__init__()
 
@@ -56,6 +57,7 @@ class CombatEnv(gym.Env):
         self.max_steps = max_steps
         self.render_mode = render_mode
         self._seed = seed
+        self.close_spawn = close_spawn  # Spawn enemies within attack range
 
         # Initialize components
         self.world = World(self.world_config, seed=seed)
@@ -95,6 +97,23 @@ class CombatEnv(gym.Env):
         # Set combat style
         self.world.npc.combat_style = self.combat_style
 
+        # Close spawn: move enemies within attack range of NPC
+        if self.close_spawn and self.world.enemies:
+            npc_pos = self.world.npc.position
+            attack_range = self.world.npc.attack_range
+            for enemy in self.world.enemies:
+                # Place enemy just within attack range (random direction)
+                import random
+                angle = random.uniform(0, 2 * 3.14159)
+                spawn_dist = attack_range * 0.8  # 80% of attack range
+                enemy.position.x = npc_pos.x + spawn_dist * np.cos(angle)
+                enemy.position.y = npc_pos.y + spawn_dist * np.sin(angle)
+                # Clamp to world bounds
+                margin = self.world.config.edge_margin
+                max_coord = self.world.config.size - margin
+                enemy.position.x = max(margin, min(max_coord, enemy.position.x))
+                enemy.position.y = max(margin, min(max_coord, enemy.position.y))
+
         # Reset tracking
         self.step_count = 0
         self.prev_alive_count = len(self.world.get_alive_enemies())
@@ -110,6 +129,7 @@ class CombatEnv(gym.Env):
 
         # Map action to world action
         world_action = Action(action)
+        action_was_attack = (world_action == Action.ATTACK)
 
         # Store state before step
         prev_alive = len(self.world.get_alive_enemies())
@@ -118,7 +138,9 @@ class CombatEnv(gym.Env):
         self.world.step(world_action)
 
         # Calculate reward
-        reward_info = self.reward_calculator.calculate(self.world, prev_alive)
+        reward_info = self.reward_calculator.calculate(
+            self.world, prev_alive, action_was_attack=action_was_attack
+        )
         reward = reward_info['total']
 
         # Check termination
@@ -202,3 +224,7 @@ class CombatEnv(gym.Env):
     def set_reward_phase(self, phase: int) -> None:
         """Update reward curriculum phase."""
         self.reward_calculator.set_phase(phase)
+
+    def set_close_spawn(self, enabled: bool) -> None:
+        """Enable/disable close spawning for next reset."""
+        self.close_spawn = enabled

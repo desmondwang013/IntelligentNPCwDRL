@@ -37,6 +37,9 @@ class CombatRewardConfig:
     phase1_penalty_scale: float = 0.5  # Reduce penalties in phase 1
     phase1_attack_attempt_bonus: float = 0.1  # Bonus for trying attack in phase 1
 
+    # Wasted attack penalty (attacking when on cooldown)
+    wasted_attack_penalty: float = -0.05  # Penalize attacking when can't attack
+
 
 class CombatReward:
     """
@@ -65,13 +68,19 @@ class CombatReward:
             return self.config.phase1_penalty_scale
         return 1.0
 
-    def calculate(self, world: World, prev_alive_count: int) -> Dict[str, float]:
+    def calculate(
+        self,
+        world: World,
+        prev_alive_count: int,
+        action_was_attack: bool = False,
+    ) -> Dict[str, float]:
         """
         Calculate reward for the current step.
 
         Args:
             world: Current world state (after step)
             prev_alive_count: Number of alive enemies before this step
+            action_was_attack: Whether the agent chose ATTACK action
 
         Returns:
             Dict with 'total' reward and component breakdown
@@ -82,6 +91,11 @@ class CombatReward:
         npc = world.npc
         style_scale = self._get_style_scale(npc.combat_style)
         penalty_scale = self._get_penalty_scale()
+
+        # Phase 1: Attack attempt bonus (encourages trying attack action)
+        if self.config.phase == 1 and action_was_attack:
+            rewards['attack_attempt'] = self.config.phase1_attack_attempt_bonus
+            total += self.config.phase1_attack_attempt_bonus
 
         # Damage dealt reward
         if world.last_damage_dealt > 0:

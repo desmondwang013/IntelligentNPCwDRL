@@ -103,9 +103,11 @@ class CombatCurriculumCallback(BaseCallback):
 
         for env in self.envs:
             if phase == 2:
-                # Full penalties, still 1 enemy
+                # Full penalties, normal spawn, still 1 enemy
                 env.set_reward_phase(2)
+                env.set_close_spawn(False)  # Disable close spawn
                 print("  - Switched to full penalty rewards")
+                print("  - Disabled close spawn")
 
             elif phase == 3:
                 # 2 enemies
@@ -135,6 +137,7 @@ def make_combat_env(
     max_steps: int = 500,
     seed: int = 42,
     reward_phase: int = 1,
+    close_spawn: bool = False,
 ):
     """Factory function to create a CombatEnv."""
     world_config = WorldConfig(size=world_size, num_objects=0)
@@ -148,6 +151,7 @@ def make_combat_env(
         max_steps=max_steps,
         reward_config=reward_config,
         seed=seed,
+        close_spawn=close_spawn,
     )
     return env
 
@@ -216,6 +220,7 @@ def main():
     print("=" * 60)
 
     # Create environments
+    # Phase 1: exploration with close spawn and attack bonus
     raw_envs = []
     for i in range(args.n_envs):
         env = make_combat_env(
@@ -225,8 +230,29 @@ def main():
             max_steps=500,
             seed=42 + i,
             reward_phase=1,  # Start with exploration phase
+            close_spawn=True,  # Spawn enemies within attack range
         )
         raw_envs.append(env)
+
+    # Verify setup
+    print("\n--- Environment Setup Verification ---")
+    for i, env in enumerate(raw_envs):
+        print(f"Env {i}: close_spawn={env.close_spawn}, "
+              f"phase={env.reward_calculator.config.phase}, "
+              f"attack_bonus={env.reward_calculator.config.phase1_attack_attempt_bonus}")
+
+    # Quick test: verify first env works
+    test_env = raw_envs[0]
+    test_obs, _ = test_env.reset()
+    test_dist = test_env.world.npc.position.distance_to(test_env.world.enemies[0].position)
+    print(f"Test reset: NPC-Enemy distance={test_dist:.3f}, in_range={test_dist <= test_env.world.npc.attack_range}")
+
+    # Test attack reward
+    from src.world import Action
+    test_obs, test_reward, _, _, test_info = test_env.step(Action.ATTACK.value)
+    print(f"Test attack: reward={test_reward:.3f}, breakdown={test_info['reward_breakdown']}")
+    test_env.reset()  # Reset for training
+    print("--- Verification Complete ---\n")
 
     # Wrap with Monitor
     monitored_envs = []
@@ -237,14 +263,15 @@ def main():
     # Create vectorized environment
     vec_env = DummyVecEnv([lambda e=env: e for env in monitored_envs])
 
-    # Create eval environment
+    # Create eval environment (same settings as training for now)
     eval_env = make_combat_env(
         world_size=args.world_size,
         num_enemies=1,  # Evaluate on 1 enemy for consistency
         combat_style=combat_style,
         max_steps=500,
         seed=999,
-        reward_phase=2,  # Full penalties for eval
+        reward_phase=1,  # Same as training
+        close_spawn=True,  # Same as training!
     )
     eval_env = Monitor(eval_env, str(log_dir / "eval"))
 
